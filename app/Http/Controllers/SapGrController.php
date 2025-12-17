@@ -364,73 +364,145 @@ class SapGrController extends Controller
                 ->withOptions(['verify' => false])
                 ->post($url, $payload);
 
+            $responseTime = round((microtime(true) - $startTime) * 1000);
+
             Log::info('SAP GR Response received', [
                 'status' => $response->status(),
                 'successful' => $response->successful(),
                 'response_body' => $response->body()
             ]);
 
-            if ($response->successful()) {
-                $responseTime = round((microtime(true) - $startTime) * 1000);
-                $sapData = $response->json();
-
-                // Update all DB records with success
+            // ✅ STEP 1: Check HTTP status code first
+            if (!$response->successful()) {
+                // Handle HTTP errors (400, 401, 403, 500, etc.)
+                $statusCode = $response->status();
+                $errorBody = $response->body();
+                
+                Log::error('❌ SAP HTTP Error', [
+                    'status_code' => $statusCode,
+                    'error_body' => $errorBody,
+                    'dn_no' => $validated['dn_no']
+                ]);
+                
+                // Update all DB records with error
                 foreach ($goodReceiptRecords as $record) {
                     $record->update([
-                        'success' => true,
-                        'error_message' => null,
-                        'material_doc_no' => $sapData['mat_doc'] ?? $sapData['material_doc_no'] ?? null,
-                        'doc_year' => $sapData['doc_year'] ?? $sapData['year'] ?? null,
-                        'posting_date' => $sapData['posting_date'] ?? $postDate,
-                        'sap_response' => $sapData,
+                        'success' => false,
+                        'error_message' => $this->parseSapErrorMessage($errorBody, $statusCode),
+                        'sap_response' => ['error' => $errorBody, 'status' => $statusCode],
                         'response_time_ms' => $responseTime
                     ]);
                 }
-
+                
                 $this->logSapActivity(
                     'create_gr', 
                     $request, 
-                    true, 
-                    $sapData, 
-                    $response->status(), 
+                    false, 
                     null, 
+                    $statusCode, 
+                    $errorBody, 
                     $responseTime, 
                     $url,
                     $rfidUser
                 );
-
-                Log::info('=== CREATE GOOD RECEIPT END (SUCCESS) ===', [
-                    'items_processed' => count($goodReceiptRecords),
-                    'material_doc_no' => $sapData['mat_doc'] ?? 'N/A',
-                    'logged_in_rfid' => $loggedInUserRfid,
-                    'posted_by_rfid' => $tappedRfid
-                ]);
-
+                
+                // Return detailed error message to Flutter
                 return response()->json([
-                    'success' => true,
-                    'message' => 'Good Receipt created successfully',
-                    'data' => $sapData,
-                    'meta' => [
-                        'items_processed' => count($goodReceiptRecords),
-                        'logged_in_user' => $loggedInUser->user_id,
-                        'posted_by_rfid' => $tappedRfid
-                    ]
-                ]);
+                    'success' => false,
+                    'message' => $this->getUserFriendlyErrorMessage($statusCode, $errorBody),
+                    'error_type' => $this->getErrorType($statusCode),
+                    'error_details' => $errorBody,
+                    'status_code' => $statusCode
+                ], $statusCode);
             }
 
-            // Handle failure
-            Log::warning('SAP GR request failed', [
-                'status' => $response->status(),
-                'body' => $response->body()
-            ]);
+            // ✅ STEP 2: HTTP 200, but check SAP response format
+            $sapData = $response->json();
 
-            $responseTime = round((microtime(true) - $startTime) * 1000);
+            // Check if SAP returned an error inside successful HTTP response
+            if (isset($sapData['type']) && strtoupper($sapData['type']) === 'E') {
+                Log::error('❌ SAP Processing Error (HTTP 200 but type=E)', [
+                    'sap_message' => $sapData['message'] ?? 'Unknown error',
+                    'sap_data' => $sapData,
+                    'dn_no' => $validated['dn_no']
+                ]);
+                
+                // Update all DB records with error
+                foreach ($goodReceiptRecords as $record) {
+                    $record->update([
+                        'success' => false,
+                        'error_message' => $sapData['message'] ?? 'SAP processing error',
+                        'sap_response' => $sapData,
+                        'response_time_ms' => $responseTime
+                    ]);
+                }
+                
+                $this->logSapActivity(
+                    'create_gr', 
+                    $request, 
+                    false, 
+                    $sapData, 
+                    422, // Business logic error
+                    $sapData['message'] ?? 'SAP processing error', 
+                    $responseTime, 
+                    $url,
+                    $rfidUser
+                );
+                
+                return response()->json([
+                    'success' => false,
+                    'message' => $sapData['message'] ?? 'SAP processing error',
+                    'error_type' => 'SAP_PROCESSING_ERROR',
+                    'data' => $sapData
+                ], 422);
+            }
 
+            // ✅ STEP 3: Check if STATUS field indicates error
+            if (isset($sapData['STATUS']) && strtoupper($sapData['STATUS']) === 'ERROR') {
+                Log::error('❌ SAP Processing Error (STATUS=ERROR)', [
+                    'sap_message' => $sapData['MESSAGE'] ?? 'Unknown error',
+                    'sap_data' => $sapData,
+                    'dn_no' => $validated['dn_no']
+                ]);
+                
+                foreach ($goodReceiptRecords as $record) {
+                    $record->update([
+                        'success' => false,
+                        'error_message' => $sapData['MESSAGE'] ?? 'SAP processing error',
+                        'sap_response' => $sapData,
+                        'response_time_ms' => $responseTime
+                    ]);
+                }
+                
+                $this->logSapActivity(
+                    'create_gr', 
+                    $request, 
+                    false, 
+                    $sapData, 
+                    422,
+                    $sapData['MESSAGE'] ?? 'SAP processing error', 
+                    $responseTime, 
+                    $url,
+                    $rfidUser
+                );
+                
+                return response()->json([
+                    'success' => false,
+                    'message' => $sapData['MESSAGE'] ?? 'SAP processing error',
+                    'error_type' => 'SAP_PROCESSING_ERROR',
+                    'data' => $sapData
+                ], 422);
+            }
+
+            // ✅ SUCCESS: Update all DB records
             foreach ($goodReceiptRecords as $record) {
                 $record->update([
-                    'success' => false,
-                    'error_message' => $response->body(),
-                    'sap_response' => ['error' => $response->body()],
+                    'success' => true,
+                    'error_message' => null,
+                    'material_doc_no' => $sapData['mat_doc'] ?? $sapData['material_doc_no'] ?? null,
+                    'doc_year' => $sapData['doc_year'] ?? $sapData['year'] ?? null,
+                    'posting_date' => $sapData['posting_date'] ?? $postDate,
+                    'sap_response' => $sapData,
                     'response_time_ms' => $responseTime
                 ]);
             }
@@ -438,20 +510,32 @@ class SapGrController extends Controller
             $this->logSapActivity(
                 'create_gr', 
                 $request, 
-                false, 
-                null, 
+                true, 
+                $sapData, 
                 $response->status(), 
-                $response->body(), 
+                null, 
                 $responseTime, 
                 $url,
                 $rfidUser
             );
 
+            Log::info('=== CREATE GOOD RECEIPT END (SUCCESS) ===', [
+                'items_processed' => count($goodReceiptRecords),
+                'material_doc_no' => $sapData['mat_doc'] ?? 'N/A',
+                'logged_in_rfid' => $loggedInUserRfid,
+                'posted_by_rfid' => $tappedRfid
+            ]);
+
             return response()->json([
-                'success' => false,
-                'message' => 'Failed to create Good Receipt',
-                'error' => $response->body()
-            ], $response->status());
+                'success' => true,
+                'message' => 'Good Receipt created successfully',
+                'data' => $sapData,
+                'meta' => [
+                    'items_processed' => count($goodReceiptRecords),
+                    'logged_in_user' => $loggedInUser->user_id,
+                    'posted_by_rfid' => $tappedRfid
+                ]
+            ]);
 
         } catch (Exception $e) {
             $responseTime = round((microtime(true) - $startTime) * 1000);
@@ -642,5 +726,102 @@ class SapGrController extends Controller
             'valid' => true,
             'user' => $user
         ];
+        
+    }
+    /**
+     * Parse SAP error message from response body
+     */
+    private function parseSapErrorMessage($errorBody, $statusCode)
+    {
+        try {
+            $decoded = json_decode($errorBody, true);
+            
+            // Check OData error format
+            if (isset($decoded['error']['message']['value'])) {
+                return $decoded['error']['message']['value'];
+            }
+            
+            // Check custom API error format
+            if (isset($decoded['message'])) {
+                return $decoded['message'];
+            }
+            
+            if (isset($decoded['MESSAGE'])) {
+                return $decoded['MESSAGE'];
+            }
+            
+            // Check BAPI return messages
+            if (isset($decoded['error_details']['bapi_return'])) {
+                $messages = array_column($decoded['error_details']['bapi_return'], 'message');
+                return implode('; ', $messages);
+            }
+            
+            return "SAP error (HTTP $statusCode)";
+            
+        } catch (\Exception $e) {
+            return "SAP error (HTTP $statusCode): " . substr($errorBody, 0, 200);
+        }
+    }
+
+    /**
+     * Get user-friendly error message based on status code
+     */
+    private function getUserFriendlyErrorMessage($statusCode, $errorBody)
+    {
+        $sapMessage = $this->parseSapErrorMessage($errorBody, $statusCode);
+        
+        switch ($statusCode) {
+            case 400:
+                return "Invalid request: $sapMessage";
+            
+            case 401:
+                return "Authentication failed. Please check SAP credentials.";
+            
+            case 403:
+                return "Authorization failed: You don't have permission to post Good Receipt. $sapMessage";
+            
+            case 404:
+                return "SAP endpoint not found. Please contact IT support.";
+            
+            case 500:
+                // Parse specific SAP 500 errors
+                if (stripos($sapMessage, 'posting period') !== false) {
+                    return "Posting period is closed: $sapMessage";
+                }
+                if (stripos($sapMessage, 'authorization') !== false) {
+                    return "Authorization error: $sapMessage";
+                }
+                if (stripos($sapMessage, 'plant') !== false && stripos($sapMessage, 'material') !== false) {
+                    return "Plant/Material assignment error: $sapMessage";
+                }
+                if (stripos($sapMessage, 'database') !== false) {
+                    return "SAP database error. Please try again or contact IT support.";
+                }
+                return "SAP server error: $sapMessage";
+            
+            case 503:
+                return "SAP system is temporarily unavailable. Please try again later.";
+            
+            default:
+                return "SAP error: $sapMessage";
+        }
+    }
+
+    /**
+     * Get error type for frontend handling
+     */
+    private function getErrorType($statusCode)
+    {
+        $errorTypes = [
+            400 => 'INVALID_REQUEST',
+            401 => 'AUTHENTICATION_ERROR',
+            403 => 'AUTHORIZATION_ERROR',
+            404 => 'NOT_FOUND',
+            500 => 'SAP_SERVER_ERROR',
+            503 => 'SERVICE_UNAVAILABLE'
+        ];
+        
+        return $errorTypes[$statusCode] ?? 'UNKNOWN_ERROR';
     }
 }
+

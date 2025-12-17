@@ -109,7 +109,7 @@ public function store(Request $request)
             'jabatan' => $request->jabatan,
             'department' => $request->department,
             'email' => $request->email,
-            'password' => Hash::make($request->password),  // ✅ CHANGED: Use provided password
+            'password' => Hash::make($request->password),  
             'id_card' => $request->id_card,
             'status' => $request->status ?? 'active',
         ]);
