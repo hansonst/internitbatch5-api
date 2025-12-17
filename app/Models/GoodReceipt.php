@@ -30,7 +30,11 @@ class GoodReceipt extends Model
         'sap_request',
         'sap_response',
         'sap_endpoint',
-        'response_time_ms'
+        'response_time_ms',
+        
+        // ✅ ADD THESE TWO COLUMNS
+        'logged_in_user_id',  // RFID of the logged-in account
+        'rfid_user_id',       // RFID that was tapped for posting
     ];
 
     protected $casts = [
@@ -49,6 +53,22 @@ class GoodReceipt extends Model
     public function user()
     {
         return $this->belongsTo(User::class, 'users_table_id', 'id');
+    }
+
+    /**
+     * ✅ NEW: Relationship to logged-in user via RFID
+     */
+    public function loggedInUser()
+    {
+        return $this->belongsTo(\App\Models\UserSap::class, 'logged_in_user_id', 'id_card');
+    }
+
+    /**
+     * ✅ NEW: Relationship to RFID user who posted
+     */
+    public function rfidUser()
+    {
+        return $this->belongsTo(\App\Models\UserSap::class, 'rfid_user_id', 'id_card');
     }
 
     /**
@@ -106,6 +126,22 @@ class GoodReceipt extends Model
     public function scopeForUser($query, $userId)
     {
         return $query->where('user_id', $userId);
+    }
+
+    /**
+     * ✅ NEW: Scope for logged-in user RFID
+     */
+    public function scopeForLoggedInRfid($query, $rfid)
+    {
+        return $query->where('logged_in_user_id', $rfid);
+    }
+
+    /**
+     * ✅ NEW: Scope for posting RFID
+     */
+    public function scopeForPostingRfid($query, $rfid)
+    {
+        return $query->where('rfid_user_id', $rfid);
     }
 
     /**
@@ -184,6 +220,35 @@ class GoodReceipt extends Model
     public function getResponseTimeInSeconds()
     {
         return $this->response_time_ms ? round($this->response_time_ms / 1000, 2) : null;
+    }
+
+    /**
+     * ✅ NEW: Check if posted by different person
+     */
+    public function isPostedByDifferentPerson()
+    {
+        return $this->logged_in_user_id !== $this->rfid_user_id;
+    }
+
+    /**
+     * ✅ NEW: Get posting details
+     */
+    public function getPostingDetails()
+    {
+        $loggedInUser = $this->loggedInUser;
+        $rfidUser = $this->rfidUser;
+
+        return [
+            'logged_in_account' => $loggedInUser ? $loggedInUser->user_id : 'Unknown',
+            'logged_in_name' => $loggedInUser ? $loggedInUser->full_name : 'Unknown',
+            'logged_in_rfid' => $this->logged_in_user_id,
+            
+            'posted_by_account' => $rfidUser ? $rfidUser->user_id : 'Unknown',
+            'posted_by_name' => $rfidUser ? $rfidUser->full_name : 'Unknown',
+            'posted_by_rfid' => $this->rfid_user_id,
+            
+            'is_different_person' => $this->isPostedByDifferentPerson()
+        ];
     }
 
     /**

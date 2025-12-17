@@ -31,7 +31,7 @@ Route::post('/login', [LoginController::class, 'login'])->name('login');
 Route::prefix('sap')->group(function () {
     // Public Authentication route
     Route::post('/login', [SapLoginController::class, 'login']);
-    
+    Route::post('/login-rfid', [SapLoginController::class, 'loginWithRfid']);
     
     // Protected routes - require authentication
     Route::middleware('auth:sanctum_sap')->group(function () {
@@ -57,7 +57,7 @@ Route::prefix('sap')->group(function () {
         Route::get('/', [SapManagementController::class, 'index']);
         Route::post('/', [SapManagementController::class, 'store']);
         Route::put('/{userId}', [SapManagementController::class, 'update']);
-        Route::post('/{userId}/reset-password', [SapManagementController::class, 'resetPassword']);
+        Route::put('/{userId}/change-password', [SapManagementController::class, 'changePassword']);
         Route::patch('/{userId}/deactivate', [SapManagementController::class, 'deactivate']);
     });
     });

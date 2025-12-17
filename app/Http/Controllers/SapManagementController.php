@@ -64,81 +64,79 @@ class SapManagementController extends Controller
     /**
      * Create new user (IT only)
      */
-    public function store(Request $request)
-    {
-        if (!$this->isItDepartment($request)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Access denied. IT department only.'
-            ], 403);
-        }
+    /**
+ * Create new user (IT only)
+ */
+public function store(Request $request)
+{
+    if (!$this->isItDepartment($request)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Access denied. IT department only.'
+        ], 403);
+    }
 
-        $validator = Validator::make($request->all(), [
-            'first_name' => 'required|string|max:50',
-            'last_name' => 'required|string|max:50',
-            'jabatan' => 'required|string|max:100',
-            'department' => 'required|string|max:100',
-            'email' => 'required|email|max:100|unique:pgsql_second.users,email',
-            'id_card' => 'nullable|string|max:50|unique:pgsql_second.users,id_card',
-            'status' => 'nullable|in:active,inactive',
+    $validator = Validator::make($request->all(), [
+        'first_name' => 'required|string|max:50',
+        'last_name' => 'required|string|max:50',
+        'jabatan' => 'required|string|max:100',
+        'department' => 'required|string|max:100',
+        'email' => 'required|email|max:100|unique:pgsql_second.users,email',
+        'password' => 'required|string|min:6',  // ✅ CHANGED: Manual password required
+        'id_card' => 'nullable|string|max:50|unique:pgsql_second.users,id_card',
+        'status' => 'nullable|in:active,inactive',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation failed',
+            'errors' => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        // Get next user_id from sequence
+        $nextId = \DB::connection('pgsql_second')
+            ->select("SELECT nextval('users_user_id_seq') as id")[0]->id;
+        $userId = 'OJSAIT' . str_pad($nextId, 3, '0', STR_PAD_LEFT);
+
+        $user = UserSap::create([
+            'user_id' => $userId,
+            'first_name' => $request->first_name,
+            'last_name' => $request->last_name,
+            'full_name' => $request->first_name . ' ' . $request->last_name,
+            'jabatan' => $request->jabatan,
+            'department' => $request->department,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),  // ✅ CHANGED: Use provided password
+            'id_card' => $request->id_card,
+            'status' => $request->status ?? 'active',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation failed',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        try {
-            // Generate random password
-            $password = $this->generatePassword();
-            
-            // Get next user_id from sequence
-            $nextId = \DB::connection('pgsql_second')
-                ->select("SELECT nextval('users_user_id_seq') as id")[0]->id;
-            $userId = 'OJSAIT' . str_pad($nextId, 3, '0', STR_PAD_LEFT);
-
-            $user = UserSap::create([
-                'user_id' => $userId,
-                'first_name' => $request->first_name,
-                'last_name' => $request->last_name,
-                'full_name' => $request->first_name . ' ' . $request->last_name,
-                'jabatan' => $request->jabatan,
-                'department' => $request->department,
-                'email' => $request->email,
-                'password' => Hash::make($password),
-                'id_card' => $request->id_card,
-                'status' => $request->status ?? 'active',
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'User created successfully',
-                'data' => [
-                    'user' => [
-                        'user_id' => $user->user_id,
-                        'first_name' => $user->first_name,
-                        'last_name' => $user->last_name,
-                        'full_name' => $user->full_name,
-                        'jabatan' => $user->jabatan,
-                        'department' => $user->department,
-                        'email' => $user->email,
-                        'status' => $user->status,
-                        'id_card' => $user->id_card,
-                    ],
-                    'generated_password' => $password // Send this ONCE to display to admin
-                ]
-            ], 201);
-        } catch (Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to create user',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+        return response()->json([
+            'success' => true,
+            'message' => 'User created successfully',
+            'data' => [  // ✅ CHANGED: Simplified response (no nested 'user')
+                'user_id' => $user->user_id,
+                'first_name' => $user->first_name,
+                'last_name' => $user->last_name,
+                'full_name' => $user->full_name,
+                'jabatan' => $user->jabatan,
+                'department' => $user->department,
+                'email' => $user->email,
+                'status' => $user->status,
+                'id_card' => $user->id_card,
+            ]
+        ], 201);
+    } catch (Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to create user',
+            'error' => $e->getMessage()
+        ], 500);
     }
+}
 
     /**
      * Update user (IT only)
@@ -221,47 +219,60 @@ class SapManagementController extends Controller
     /**
      * Reset user password (IT only)
      */
-    public function resetPassword(Request $request, $userId)
-    {
-        if (!$this->isItDepartment($request)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Access denied. IT department only.'
-            ], 403);
-        }
-
-        try {
-            $user = UserSap::where('user_id', $userId)->first();
-
-            if (!$user) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'User not found'
-                ], 404);
-            }
-
-            $newPassword = $this->generatePassword();
-            $user->update([
-                'password' => Hash::make($newPassword)
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Password reset successfully',
-                'data' => [
-                    'user_id' => $user->user_id,
-                    'full_name' => $user->full_name,
-                    'new_password' => $newPassword
-                ]
-            ]);
-        } catch (Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to reset password',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+   /**
+ * Change user password (IT only)
+ */
+public function changePassword(Request $request, $userId)
+{
+    if (!$this->isItDepartment($request)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Access denied. IT department only.'
+        ], 403);
     }
+
+    $validator = Validator::make($request->all(), [
+        'new_password' => 'required|string|min:6',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation failed',
+            'errors' => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        $user = UserSap::where('user_id', $userId)->first();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found'
+            ], 404);
+        }
+
+        $user->update([
+            'password' => Hash::make($request->new_password)
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password changed successfully',
+            'data' => [
+                'user_id' => $user->user_id,
+                'full_name' => $user->full_name,
+            ]
+        ]);
+    } catch (Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to change password',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
 
     /**
      * Deactivate user (soft delete by setting status to inactive)
