@@ -9,7 +9,7 @@ use App\Http\Controllers\ProductionReportController;
 use App\Http\Controllers\ChangelogsController;
 use App\Http\Controllers\SapGrController;
 use App\Http\Controllers\SapLoginController;
-
+use App\Http\Controllers\SapManagementController;
 
 // Health check route
 Route::get('health', function () {
@@ -53,6 +53,13 @@ Route::prefix('sap')->group(function () {
     
     // Optional: Get unique dropdown values only (lighter response)
     Route::get('/gr-dropdown-values', [SapGrController::class, 'getGrDropdownValues']);
+     Route::prefix('users')->group(function () {
+        Route::get('/', [SapManagementController::class, 'index']);
+        Route::post('/', [SapManagementController::class, 'store']);
+        Route::put('/{userId}', [SapManagementController::class, 'update']);
+        Route::post('/{userId}/reset-password', [SapManagementController::class, 'resetPassword']);
+        Route::patch('/{userId}/deactivate', [SapManagementController::class, 'deactivate']);
+    });
     });
 });
 

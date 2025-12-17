@@ -28,6 +28,7 @@ class UserSap extends Authenticatable
         'email',
         'password',
         'status',
+        'id_card'
     ];
 
     protected $hidden = [
